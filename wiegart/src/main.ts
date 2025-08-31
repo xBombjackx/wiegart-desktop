@@ -114,12 +114,18 @@ function handleFile(file: File) {
     reader.onload = (e) => {
         const imageUrl = e.target!.result as string;
 
-        previewImage.onload = () => {
-            processImage(previewImage);
-            previewImage.onload = null; // Clear handler after use
-        };
-        
+        // Update the visible preview image for the user
         previewImage.src = imageUrl;
+
+        // Use a new, in-memory image for processing to ensure reliability.
+        // This avoids potential race conditions with the DOM element's load event.
+        const processingImage = new Image();
+        processingImage.onload = () => {
+            // Pass this new, reliably-loaded image object to the processing function.
+            processImage(processingImage);
+        };
+        processingImage.src = imageUrl;
+        
         statusArea.classList.remove('hidden');
         configArea.classList.remove('hidden');
     };
@@ -159,10 +165,12 @@ function processImage(imageElement: HTMLImageElement) {
 
     const options = {
         numberofcolors: parseInt(colorSlider.value, 10),
-        ltres: 0.1,
-        qtres: 0.1,
+
+        ltres: 0.01,
+        qtres: 0.01,
         pathomit: 0,
-        roundcoords: 2
+        roundcoords: 3
+
     };
 
     // Post the data to the worker
