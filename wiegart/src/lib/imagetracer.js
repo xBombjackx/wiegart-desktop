@@ -869,7 +869,6 @@ function ImageTracer(){
 		// Starting path element, desc contains layer and path number
 		str = '<path '+
 			( options.desc ? ('desc="l '+lnum+' p '+pathnum+'" ') : '' ) +
-			_this.tosvgcolorstr(tracedata.palette[lnum], options) +
 			'd="';
 
 		// Creating non-hole path string
@@ -988,6 +987,7 @@ function ImageTracer(){
 
 		// Drawing: Layers and Paths loops
 		for(var lcnt=0; lcnt < tracedata.layers.length; lcnt++){
+			svgstr += '<g ' + _this.tosvgcolorstr(tracedata.palette[lcnt], options) + '>';
 			for(var pcnt=0; pcnt < tracedata.layers[lcnt].length; pcnt++){
 
 				// Adding SVG <path> string
@@ -996,6 +996,7 @@ function ImageTracer(){
 				}
 
 			}// End of paths loop
+			svgstr += '</g>';
 		}// End of layers loop
 
 		// SVG End
