@@ -12,7 +12,7 @@ const colorCount = document.getElementById('color-count')!;
 const saveButton = document.getElementById('save-button') as HTMLButtonElement;
 
 // Application State
-let vectorizedData: any = null;
+let vectorizedSvgString: string | null = null;
 
 // --- Worker Setup ---
 const worker = new Worker(new URL('./worker.ts', import.meta.url)/*, {
@@ -20,9 +20,9 @@ const worker = new Worker(new URL('./worker.ts', import.meta.url)/*, {
 }*/);
 
 worker.onmessage = (e: MessageEvent) => {
-    const { type, data, message } = e.data;
+    const { type, svgstring, message } = e.data;
     if (type === 'SUCCESS') {
-        vectorizedData = data;
+        vectorizedSvgString = svgstring;
         statusMessage.textContent = "Vectorization complete!";
         saveButton.disabled = false;
     } else if (type === 'ERROR') {
@@ -79,19 +79,16 @@ colorSlider.addEventListener('input', (e) => {
 
 // Save button listener
 saveButton.addEventListener('click', async () => {
-    if (vectorizedData) {
+    if (vectorizedSvgString) {
         statusMessage.textContent = "Preparing to save...";
         try {
-            // The vectorized data is already in a state that can be used to generate the SVG string.
-            // We need a way to get the SVG string. Since the worker only returns tracedata,
-            // we still need access to the getsvgstring function on the main thread.
-            const ImageTracer = (window as any).ImageTracer;
-            const svgString = ImageTracer.getsvgstring(vectorizedData);
-            await invoke('save_svg', { svg_content: svgString });
+            // The worker has already prepared the SVG string.
+            // We just need to pass it to the backend. The backend expects camelCase.
+            await invoke('save_svg', { svgContent: vectorizedSvgString });
             statusMessage.textContent = "SVG saved successfully!";
         } catch (error) {
             statusMessage.textContent = `Error saving file: ${error}`;
-            console.error("Error invoking backend or creating SVG:", error);
+            console.error("Error invoking backend:", error);
         }
     }
 });
@@ -133,7 +130,7 @@ function handleFile(file: File) {
 
     // Reset state for the new image
     saveButton.disabled = true;
-    vectorizedData = null;
+    vectorizedSvgString = null;
 }
 
 /**
@@ -149,6 +146,7 @@ function processImage(imageElement: HTMLImageElement) {
 
     statusMessage.textContent = "Vectorizing image...";
     saveButton.disabled = true;
+    vectorizedSvgString = null; // Reset SVG string when re-processing
 
     const canvas = document.createElement('canvas');
     const ctx = canvas.getContext('2d')!;
