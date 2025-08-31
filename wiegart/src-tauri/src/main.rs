@@ -7,26 +7,24 @@ use std::fs::write;
 use std::path::PathBuf;
 
 // This command receives the SVG content from the frontend and prompts the user to save it.
-// It is now async and returns a Result so that frontend can get specific error messages.
 #[tauri::command]
-async fn save_svg(app: AppHandle, svg_content: String) -> Result<(), String> {
-    let file_path = app.dialog()
+fn save_svg(app: AppHandle, svg_content: String) {
+    let dialog = app.dialog();
+    dialog
         .file()
         .set_title("Save SVG File")
         .set_file_name("vectorized-image.svg")
         .add_filter("Scalable Vector Graphic", &["svg"])
-        .save_file()
-        .await;
-
-    if let Some(path) = file_path {
-        // The path from the dialog can be a string or a PathBuf, we ensure it's a PathBuf
-        let path_buf = PathBuf::from(path.to_string());
-        // Write the file, and if it fails, map the error to a String to be sent to the frontend.
-        write(&path_buf, svg_content).map_err(|e| e.to_string())
-    } else {
-        // If the user cancels the dialog, `file_path` is None. This is not an error.
-        Ok(())
-    }
+        .save_file(move |file_path| {
+            if let Some(path) = file_path {
+                // The path from the dialog can be a string or a PathBuf, we ensure it's a PathBuf
+                let path_buf = PathBuf::from(path.to_string());
+                // Write the file, and if it fails, log the error.
+                if let Err(e) = write(&path_buf, &svg_content) {
+                    eprintln!("Failed to save SVG: {}", e);
+                }
+            }
+        });
 }
 
 

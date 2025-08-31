@@ -13,12 +13,11 @@ const saveButton = document.getElementById('save-button') as HTMLButtonElement;
 
 // Application State
 let vectorizedData: any = null;
-let originalFile: File | null = null;
 
 // --- Worker Setup ---
-const worker = new Worker(new URL('./worker.ts', import.meta.url), {
+const worker = new Worker(new URL('./worker.ts', import.meta.url)/*, {
     type: 'module'
-});
+}*/);
 
 worker.onmessage = (e: MessageEvent) => {
     const { type, data, message } = e.data;
@@ -109,7 +108,8 @@ function handleFile(file: File) {
         return;
     }
 
-    originalFile = file;
+    // we can log the file name for debugging, but we don't need to store it
+    console.log("Handling file:", file.name);
     statusMessage.textContent = "Loading image...";
 
     const reader = new FileReader();
