@@ -23,9 +23,12 @@ self.onmessage = (e: MessageEvent) => {
     }
 
     try {
+        // 1. Trace the image data to get the intermediate `tracedata` structure.
         const tracedata = ImageTracer.imagedataToTracedata(imageData, options);
-        // Post the tracedata back to the main thread
-        (self as any).postMessage({ type: 'SUCCESS', data: tracedata });
+        // 2. Generate the final SVG string from the `tracedata`.
+        const svgstring = ImageTracer.getsvgstring(tracedata, options);
+        // 3. Post both data structures back to the main thread.
+        (self as any).postMessage({ type: 'SUCCESS', data: tracedata, svgstring: svgstring });
     } catch (error: any) {
         // Post an error message back to the main thread
         (self as any).postMessage({ type: 'ERROR', message: error.message });
