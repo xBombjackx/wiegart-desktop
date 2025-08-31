@@ -14,7 +14,30 @@ const saveButton = document.getElementById('save-button') as HTMLButtonElement;
 // Application State
 let vectorizedData: any = null;
 let originalFile: File | null = null;
-// The global 'imageObject' is no longer needed, we will use the previewImage element directly.
+
+// --- Worker Setup ---
+const worker = new Worker(new URL('./worker.ts', import.meta.url), {
+    type: 'module'
+});
+
+worker.onmessage = (e: MessageEvent) => {
+    const { type, data, message } = e.data;
+    if (type === 'SUCCESS') {
+        vectorizedData = data;
+        statusMessage.textContent = "Vectorization complete!";
+        saveButton.disabled = false;
+    } else if (type === 'ERROR') {
+        statusMessage.textContent = `Error during vectorization: ${message}`;
+        console.error("ImageTracer Worker Error:", message);
+        saveButton.disabled = true;
+    }
+};
+
+worker.onerror = (error: ErrorEvent) => {
+    statusMessage.textContent = `An unexpected error occurred in the worker: ${error.message}`;
+    console.error("Worker Error:", error);
+    saveButton.disabled = true;
+};
 
 // --- Event Listeners ---
 
@@ -59,13 +82,17 @@ colorSlider.addEventListener('input', (e) => {
 saveButton.addEventListener('click', async () => {
     if (vectorizedData) {
         statusMessage.textContent = "Preparing to save...";
-        const svgString = assembleSvgString(vectorizedData);
         try {
+            // The vectorized data is already in a state that can be used to generate the SVG string.
+            // We need a way to get the SVG string. Since the worker only returns tracedata,
+            // we still need access to the getsvgstring function on the main thread.
+            const ImageTracer = (window as any).ImageTracer;
+            const svgString = ImageTracer.getsvgstring(vectorizedData);
             await invoke('save_svg', { svg_content: svgString });
             statusMessage.textContent = "SVG saved successfully!";
         } catch (error) {
-            statusMessage.textContent = "Error saving file.";
-            console.error("Error invoking backend:", error);
+            statusMessage.textContent = `Error saving file: ${error}`;
+            console.error("Error invoking backend or creating SVG:", error);
         }
     }
 });
@@ -77,6 +104,11 @@ saveButton.addEventListener('click', async () => {
  * This function now uses the 'previewImage' element's own 'onload' event for reliability.
  */
 function handleFile(file: File) {
+    if (!file.type.startsWith('image/')) {
+        statusMessage.textContent = "Please select an image file.";
+        return;
+    }
+
     originalFile = file;
     statusMessage.textContent = "Loading image...";
 
@@ -84,20 +116,18 @@ function handleFile(file: File) {
     reader.onload = (e) => {
         const imageUrl = e.target!.result as string;
 
-        // Set up the onload event for the VISIBLE preview image.
-        // This will fire once the image data is loaded into the element.
         previewImage.onload = () => {
-            // Now that the preview image is fully loaded, process it.
             processImage(previewImage);
-            // Clear the onload handler to prevent it from firing again accidentally.
-            previewImage.onload = null;
+            previewImage.onload = null; // Clear handler after use
         };
         
-        // Set the src of the preview image. This triggers the loading process.
         previewImage.src = imageUrl;
-        
         statusArea.classList.remove('hidden');
         configArea.classList.remove('hidden');
+    };
+    reader.onerror = () => {
+        statusMessage.textContent = "Error reading file.";
+        console.error("FileReader error.");
     };
     reader.readAsDataURL(file);
 
@@ -111,65 +141,28 @@ function handleFile(file: File) {
  * It now accepts the image element to process as an argument.
  */
 function processImage(imageElement: HTMLImageElement) {
-    // Check if the image is valid and loaded
     if (!imageElement || !imageElement.src || imageElement.naturalWidth === 0) {
+        statusMessage.textContent = "Image is not valid for processing.";
         console.error("processImage was called with an invalid or unloaded image.");
         return;
     }
-    
+
     statusMessage.textContent = "Vectorizing image...";
     saveButton.disabled = true;
 
-    // Use a timeout to allow the UI to update before the CPU-intensive tracing operation
-    setTimeout(() => {
-        const canvas = document.createElement('canvas');
-        const ctx = canvas.getContext('2d')!;
-        // Use naturalWidth/Height to get the original image dimensions
-        canvas.width = imageElement.naturalWidth;
-        canvas.height = imageElement.naturalHeight;
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d')!;
+    canvas.width = imageElement.naturalWidth;
+    canvas.height = imageElement.naturalHeight;
+    ctx.drawImage(imageElement, 0, 0);
 
-        ctx.drawImage(imageElement, 0, 0);
-        
-        const imageData = ctx.getImageData(0, 0, imageElement.naturalWidth, imageElement.naturalHeight);
+    const imageData = ctx.getImageData(0, 0, imageElement.naturalWidth, imageElement.naturalHeight);
 
-        const options = {
-            numberofcolors: parseInt(colorSlider.value, 10),
-            ltres: 1, qtres: 1, pathomit: 8
-        };
-        
-        (window as any).ImageTracer.imagedataToTracedata(imageData, (tracedata: any) => {
-            vectorizedData = tracedata;
-            statusMessage.textContent = "Vectorization complete!";
-            saveButton.disabled = false; // Enable the save button
-        }, options);
-    }, 100);
-}
+    const options = {
+        numberofcolors: parseInt(colorSlider.value, 10),
+        ltres: 1, qtres: 1, pathomit: 8
+    };
 
-/**
- * Assembles the final SVG string from tracedata.
- */
-function assembleSvgString(data: any): string {
-    const { width, height, layers, palette } = data;
-    let svgString = `<svg width="${width}" height="${height}" xmlns="http://www.w3.org/2000/svg">`;
-
-    layers.forEach((layer: any[], layerIndex: number) => {
-        const color = palette[layerIndex];
-        const fillColor = `rgb(${color.r}, ${color.g}, ${color.b})`;
-        svgString += `<g fill="${fillColor}">`;
-        layer.forEach(path => {
-            let pathString = '';
-            path.forEach((segment: any[]) => {
-                pathString += `M ${segment[0][0]} ${segment[0][1]} `;
-                for (let i = 1; i < segment.length; i++) {
-                    pathString += `L ${segment[i][0]} ${segment[i][1]} `;
-                }
-                pathString += 'Z ';
-            });
-            svgString += `<path d="${pathString}" />`;
-        });
-        svgString += `</g>`;
-    });
-
-    svgString += `</svg>`;
-    return svgString;
+    // Post the data to the worker
+    worker.postMessage({ imageData, options });
 }
