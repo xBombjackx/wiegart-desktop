@@ -165,10 +165,12 @@ function processImage(imageElement: HTMLImageElement) {
 
     const options = {
         numberofcolors: parseInt(colorSlider.value, 10),
+
         ltres: 0.01,
         qtres: 0.01,
         pathomit: 0,
         roundcoords: 3
+
     };
 
     // Post the data to the worker
