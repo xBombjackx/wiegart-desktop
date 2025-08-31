@@ -83,6 +83,7 @@ saveButton.addEventListener('click', async () => {
         statusMessage.textContent = "Preparing to save...";
         try {
             // The worker has already prepared the SVG string.
+
             // We just need to pass it to the backend. The backend expects camelCase.
             await invoke('save_svg', { svgContent: vectorizedSvgString });
             statusMessage.textContent = "SVG saved successfully!";
