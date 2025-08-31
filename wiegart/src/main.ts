@@ -1,4 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
+import { writeBinaryFile } from '@tauri-apps/plugin-fs';
+import { appCacheDir, join } from '@tauri-apps/api/path';
+import quantize from 'quantize';
 
 // DOM Element References
 const dropZone = document.getElementById('drop-zone')!;
@@ -15,9 +18,7 @@ const saveButton = document.getElementById('save-button') as HTMLButtonElement;
 let vectorizedSvgString: string | null = null;
 
 // --- Worker Setup ---
-const worker = new Worker(new URL('./worker.ts', import.meta.url)/*, {
-    type: 'module'
-}*/);
+const worker = new Worker(new URL('./worker.ts', import.meta.url));
 
 worker.onmessage = (e: MessageEvent) => {
     const { type, svgstring, message } = e.data;
@@ -25,9 +26,14 @@ worker.onmessage = (e: MessageEvent) => {
         vectorizedSvgString = svgstring;
         statusMessage.textContent = "Vectorization complete!";
         saveButton.disabled = false;
+        // Display the vectorized image
+        const blob = new Blob([svgstring], { type: 'image/svg+xml' });
+        const url = URL.createObjectURL(blob);
+        previewImage.src = url;
+
     } else if (type === 'ERROR') {
         statusMessage.textContent = `Error during vectorization: ${message}`;
-        console.error("ImageTracer Worker Error:", message);
+        console.error("Worker Error:", message);
         saveButton.disabled = true;
     }
 };
@@ -40,7 +46,6 @@ worker.onerror = (error: ErrorEvent) => {
 
 // --- Event Listeners ---
 
-// Handle clicks on the drop zone to trigger the hidden file input
 dropZone.addEventListener('click', () => fileInput.click());
 fileInput.addEventListener('change', (e) => {
     const target = e.target as HTMLInputElement;
@@ -49,9 +54,8 @@ fileInput.addEventListener('change', (e) => {
     }
 });
 
-// Drag and Drop Listeners
 dropZone.addEventListener('dragover', (e) => {
-    e.preventDefault(); // Necessary to allow drop
+    e.preventDefault();
     dropZone.classList.add('dragover');
 });
 
@@ -67,24 +71,21 @@ dropZone.addEventListener('drop', (e) => {
     }
 });
 
-// Slider listener to re-process the image with a new color count
 colorSlider.addEventListener('input', (e) => {
     const target = e.target as HTMLInputElement;
     colorCount.textContent = target.value;
-    // If a preview image has a source, it means an image is loaded and ready to be re-processed.
-    if (previewImage.src) {
-        processImage(previewImage);
+    if (previewImage.dataset.originalSrc) {
+        // Create a temporary image object to re-process
+        const tempImage = new Image();
+        tempImage.onload = () => processImage(tempImage);
+        tempImage.src = previewImage.dataset.originalSrc;
     }
 });
 
-// Save button listener
 saveButton.addEventListener('click', async () => {
     if (vectorizedSvgString) {
         statusMessage.textContent = "Preparing to save...";
         try {
-            // The worker has already prepared the SVG string.
-
-            // We just need to pass it to the backend. The backend expects camelCase.
             await invoke('save_svg', { svgContent: vectorizedSvgString });
             statusMessage.textContent = "SVG saved successfully!";
         } catch (error) {
@@ -96,75 +97,141 @@ saveButton.addEventListener('click', async () => {
 
 // --- Core Logic Functions ---
 
-/**
- * Handles the file once it's selected or dropped.
- * This function now uses the 'previewImage' element's own 'onload' event for reliability.
- */
 function handleFile(file: File) {
     if (!file.type.startsWith('image/')) {
         statusMessage.textContent = "Please select an image file.";
         return;
     }
 
-    // we can log the file name for debugging, but we don't need to store it
-    console.log("Handling file:", file.name);
     statusMessage.textContent = "Loading image...";
-
     const reader = new FileReader();
     reader.onload = (e) => {
         const imageUrl = e.target!.result as string;
+        previewImage.dataset.originalSrc = imageUrl; // Store original source
 
         previewImage.onload = () => {
             processImage(previewImage);
-            previewImage.onload = null; // Clear handler after use
+            previewImage.onload = null; // Clear handler
         };
-        
+
         previewImage.src = imageUrl;
         statusArea.classList.remove('hidden');
         configArea.classList.remove('hidden');
     };
     reader.onerror = () => {
         statusMessage.textContent = "Error reading file.";
-        console.error("FileReader error.");
     };
     reader.readAsDataURL(file);
 
-    // Reset state for the new image
     saveButton.disabled = true;
     vectorizedSvgString = null;
 }
 
-/**
- * Processes the image using ImageTracer.js.
- * It now accepts the image element to process as an argument.
- */
-function processImage(imageElement: HTMLImageElement) {
+async function processImage(imageElement: HTMLImageElement) {
     if (!imageElement || !imageElement.src || imageElement.naturalWidth === 0) {
         statusMessage.textContent = "Image is not valid for processing.";
-        console.error("processImage was called with an invalid or unloaded image.");
         return;
     }
 
-    statusMessage.textContent = "Vectorizing image...";
+    statusMessage.textContent = "Quantizing and vectorizing...";
     saveButton.disabled = true;
-    vectorizedSvgString = null; // Reset SVG string when re-processing
+    vectorizedSvgString = null;
 
     const canvas = document.createElement('canvas');
-    const ctx = canvas.getContext('2d')!;
+    const ctx = canvas.getContext('2d', { willReadFrequently: true })!;
     canvas.width = imageElement.naturalWidth;
     canvas.height = imageElement.naturalHeight;
     ctx.drawImage(imageElement, 0, 0);
 
-    const imageData = ctx.getImageData(0, 0, imageElement.naturalWidth, imageElement.naturalHeight);
+    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    const pixelArray = getPixelArray(imageData);
 
-    const options = {
-        numberofcolors: parseInt(colorSlider.value, 10),
-        ltres: 0.1,
-        qtres: 0.1,
-        pathomit: 0,
-        roundcoords: 2
-    };
+    const colorMap = quantize(pixelArray, parseInt(colorSlider.value, 10));
+    if (!colorMap) {
+        statusMessage.textContent = "Error: Could not create color palette.";
+        return;
+    }
+    const palette = colorMap.palette().map((rgb: number[]) => ({
+        rgb: rgb,
+        hex: `#${rgb.map(c => c.toString(16).padStart(2, '0')).join('')}`
+    }));
 
-    // Post the data to the worker
-    worker.postMessage({ imageData, options });
+    const quantizedImageData = createQuantizedImageData(imageData, palette);
+
+    // Draw quantized image to a new canvas to get PNG data
+    const quantizedCanvas = document.createElement('canvas');
+    quantizedCanvas.width = quantizedImageData.width;
+    quantizedCanvas.height = quantizedImageData.height;
+    const quantizedCtx = quantizedCanvas.getContext('2d')!;
+    quantizedCtx.putImageData(quantizedImageData, 0, 0);
+
+    // Get data URL and convert to binary
+    const dataUrl = quantizedCanvas.toDataURL('image/png');
+    const response = await fetch(dataUrl);
+    const blob = await response.blob();
+    const binaryData = await new Response(blob).arrayBuffer();
+
+    const cacheDir = await appCacheDir();
+    const tempImagePath = await join(cacheDir, 'temp_quantized.png');
+
+    await writeBinaryFile(tempImagePath, new Uint8Array(binaryData));
+
+    worker.postMessage({
+        imageData: { width: imageData.width, height: imageData.height },
+        tempImagePath: tempImagePath, // Pass the absolute path
+        palette,
+    });
+}
+
+function getPixelArray(imageData: ImageData): [number, number, number][] {
+    const pixels: [number, number, number][] = [];
+    for (let i = 0; i < imageData.data.length; i += 4) {
+        // Ignore transparent pixels
+        if (imageData.data[i + 3] > 128) {
+            pixels.push([imageData.data[i], imageData.data[i + 1], imageData.data[i + 2]]);
+        }
+    }
+    return pixels;
+}
+
+function createQuantizedImageData(originalData: ImageData, palette: { rgb: number[] }[]): ImageData {
+    const quantizedData = new Uint8ClampedArray(originalData.data.length);
+    const originalPixels = originalData.data;
+
+    for (let i = 0; i < originalPixels.length; i += 4) {
+        if (originalPixels[i + 3] === 0) { // Preserve transparency
+            quantizedData[i] = 0;
+            quantizedData[i + 1] = 0;
+            quantizedData[i + 2] = 0;
+            quantizedData[i + 3] = 0;
+            continue;
+        }
+
+        const closestColor = findClosestColor(
+            [originalPixels[i], originalPixels[i + 1], originalPixels[i + 2]],
+            palette
+        );
+        quantizedData[i] = closestColor[0];
+        quantizedData[i + 1] = closestColor[1];
+        quantizedData[i + 2] = closestColor[2];
+        quantizedData[i + 3] = 255;
+    }
+    return new ImageData(quantizedData, originalData.width, originalData.height);
+}
+
+function findClosestColor(pixel: number[], palette: { rgb: number[] }[]): number[] {
+    let closestDistance = Infinity;
+    let closestColor = palette[0].rgb;
+    for (const color of palette) {
+        const distance = Math.sqrt(
+            Math.pow(pixel[0] - color.rgb[0], 2) +
+            Math.pow(pixel[1] - color.rgb[1], 2) +
+            Math.pow(pixel[2] - color.rgb[2], 2)
+        );
+        if (distance < closestDistance) {
+            closestDistance = distance;
+            closestColor = color.rgb;
+        }
+    }
+    return closestColor;
 }

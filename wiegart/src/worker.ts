@@ -1,36 +1,42 @@
-// In a classic worker, we use importScripts to load external scripts.
-// The path should be relative to the worker script's location.
-try {
-    importScripts('./lib/imagetracer.js');
-} catch (e) {
-    console.error("Failed to load ImageTracer:", e);
-    // It might be beneficial to send an error message back to the main thread here
-    // so the UI can reflect that the worker failed to initialize.
-    (self as any).postMessage({ type: 'ERROR', message: 'Worker initialization failed.' });
-}
+import { invoke } from '@tauri-apps/api/core';
 
+self.onmessage = async (e: MessageEvent) => {
+    const { imageData, tempImagePath, palette } = e.data;
 
-// The ImageTracer library attaches itself to the global scope (self).
-const ImageTracer = (self as any).ImageTracer;
-
-self.onmessage = (e: MessageEvent) => {
-    const { imageData, options } = e.data;
-
-    // It's good practice to check if the library was loaded successfully.
-    if (!ImageTracer) {
-        (self as any).postMessage({ type: 'ERROR', message: 'ImageTracer not available.' });
+    if (!imageData || !tempImagePath || !palette) {
+        (self as any).postMessage({ type: 'ERROR', message: 'Worker received invalid data.' });
         return;
     }
 
+    const svgLayers = [];
+
     try {
-        // 1. Trace the image data to get the intermediate `tracedata` structure.
-        const tracedata = ImageTracer.imagedataToTracedata(imageData, options);
-        // 2. Generate the final SVG string from the `tracedata`.
-        const svgstring = ImageTracer.getsvgstring(tracedata, options);
-        // 3. Post both data structures back to the main thread.
-        (self as any).postMessage({ type: 'SUCCESS', data: tracedata, svgstring: svgstring });
+        for (const color of palette) {
+            try {
+                // Call the new Rust command for each color
+                const svgPathData = await invoke('trace_with_potrace', {
+                    imagePath: tempImagePath,
+                    color: color.hex,
+                });
+
+                if (typeof svgPathData === 'string' && svgPathData.length > 0) {
+                    // Create an SVG layer from the returned path data
+                    const layer = `<path d="${svgPathData}" fill="${color.hex}" />`;
+                    svgLayers.push(layer);
+                }
+
+            } catch (error) {
+                console.error(`Error tracing color ${color.hex}:`, error);
+                // Optionally, you could decide to continue or to fail the whole process
+                // For now, we'll log and continue
+            }
+        }
+
+        // Assemble the final SVG
+        const finalSvg = `<svg width="${imageData.width}" height="${imageData.height}" xmlns="http://www.w3.org/2000/svg">${svgLayers.join('')}</svg>`;
+        (self as any).postMessage({ type: 'SUCCESS', svgstring: finalSvg });
+
     } catch (error: any) {
-        // Post an error message back to the main thread
-        (self as any).postMessage({ type: 'ERROR', message: error.message });
+        (self as any).postMessage({ type: 'ERROR', message: error.message || 'An unknown error occurred in the worker.' });
     }
 };
