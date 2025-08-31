@@ -75,6 +75,9 @@
 
     <!-- This is where the application logic will go, as per Section 3.2 -->
     <script>
+        // Tauri-specific API access. These are globally available in a Tauri app.
+        const { invoke } = window.__TAURI__.tauri;
+        
         // DOM Element References
         const dropZone = document.getElementById('drop-zone');
         const fileInput = document.getElementById('file-input');
@@ -129,26 +132,23 @@
         });
         
         // Save button listener
-        saveButton.addEventListener('click', () => {
+        saveButton.addEventListener('click', async () => {
             if (vectorizedData) {
-                // This is where we will call the Rust backend via a Tauri command
-                // as described in Section 3.3 of the technical guide.
-                console.log("Preparing to save SVG...");
+                statusMessage.textContent = "Preparing to save...";
+                console.log("Preparing to save SVG via Tauri backend...");
                 
                 const svgString = assembleSvgString(vectorizedData);
-                console.log("Generated SVG:", svgString);
 
-                // For now, we'll trigger a browser download as a placeholder
-                // This will be replaced by the Tauri dialog API call.
-                const blob = new Blob([svgString], {type: 'image/svg+xml'});
-                const url = URL.createObjectURL(blob);
-                const a = document.createElement('a');
-                a.href = url;
-                a.download = 'vectorized-image.svg';
-                document.body.appendChild(a);
-                a.click();
-                document.body.removeChild(a);
-                URL.revokeObjectURL(url);
+                try {
+                    // Use Tauri's 'invoke' to call the Rust command 'save_svg'
+                    // This replaces the browser-based download placeholder.
+                    await invoke('save_svg', { svgContent: svgString });
+                    statusMessage.textContent = "SVG saved successfully!";
+                    console.log("Successfully invoked backend and saved file.");
+                } catch (error) {
+                    statusMessage.textContent = "Error saving file.";
+                    console.error("Error invoking backend:", error);
+                }
             }
         });
 
